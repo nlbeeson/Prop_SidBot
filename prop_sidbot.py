@@ -171,28 +171,21 @@ def apply_trailing_stop():
         return
 
     for pos in positions:
-        # Ensure we only manage trades opened by this specific bot instance
         if pos.magic != MAGIC_NUMBER:
             continue
 
         symbol = pos.symbol
         df = get_data(symbol)
-
-        # Ensure we have enough data for a valid ATR_14 calculation
         if df.empty or len(df) < 20:
             continue
 
-        # 1. Calculate ATR and Dynamic Trail Distance
         df.ta.atr(length=14, append=True)
         atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
         if not atr_cols:
-            logger.warning(f"⚠️ ATR calculation failed for {symbol}")
-            continue
+                continue
 
         current_atr = df[atr_cols[-1]].iloc[-1]
         category = get_symbol_category(symbol)
-
-        # Pull multiplier from config; default to 2.0 if not found
         trail_dist = current_atr * VOLATILITY_MULT.get(category, 2.0)
 
         tick = mt5.symbol_info_tick(symbol)
@@ -201,31 +194,23 @@ def apply_trailing_stop():
 
         current_sl = pos.sl
         new_sl = 0.0
-
-        # 2. Stiffness Check (0.1 * ATR)
-        # Prevents "spamming" the server by only moving SL if improvement is > 10% of ATR
         stiffness_threshold = current_atr * 0.1
 
-        # 3. Trailing Logic
         if pos.type == mt5.POSITION_TYPE_BUY:
             potential_sl = tick.bid - trail_dist
-            # For Longs, move SL UP only if the gap is significant
             if potential_sl > current_sl + stiffness_threshold:
                 new_sl = potential_sl
 
         elif pos.type == mt5.POSITION_TYPE_SELL:
             potential_sl = tick.ask + trail_dist
-            # For Shorts, move SL DOWN only if the gap is significant
             if current_sl == 0 or potential_sl < current_sl - stiffness_threshold:
                 new_sl = potential_sl
 
-        # 4. Execute Unified Update
         if new_sl > 0:
             request = {
                 "action": mt5.TRADE_ACTION_SLTP,
                 "symbol": symbol,
                 "position": pos.ticket,
-                # Round to 5 digits to match MT5 requirements for Forex/Metals
                 "sl": float(round(new_sl, 5)),
                 "tp": pos.tp,
                 "type_time": mt5.ORDER_TIME_GTC,
@@ -233,9 +218,7 @@ def apply_trailing_stop():
             }
             result = mt5.order_send(request)
             if result.retcode == mt5.TRADE_RETCODE_DONE:
-                logger.info(f"📈 Trailing SL updated for {symbol} to {new_sl:.5f}")
-            else:
-                logger.error(f"❌ SL Update failed for {symbol}: {result.comment}")
+                print(f"📈 Trailing SL updated for {symbol} to {new_sl:.5f}")
 
 
 def get_current_currency_exposure(new_ticker):
