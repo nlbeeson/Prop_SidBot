@@ -528,7 +528,7 @@ def execute_mt5_trade(pick):
         "type": order_type,
         "price": price,
         "sl": float(pick['stop_price']),
-        "magic": 123456,
+        "magic": MAGIC_NUMBER,
         "comment": "Sid Bot Entry",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_type,
