@@ -78,12 +78,20 @@ def run_entry_scan():
         logger.info(f"⏸️ Entry scan blocked: Market rollover period ({now_time}).")
         return
 
-    """Scans universe and enters positions using MT5."""
+
     run_exit_scan()
 
+    # Check for Active and pending positions to avoid opening the same symbol
+    # 1. Fetch Active Positions
     positions = mt5.positions_get()
     existing_symbols = {p.symbol for p in positions} if positions else set()
 
+    # 2. Fetch Pending Orders to prevent duplicates while waiting for fills
+    pending_orders = mt5.orders_get()
+    if pending_orders:
+        existing_symbols.update({o.symbol for o in pending_orders})
+
+    # Calculate slots based on the combined block list
     slots_available = MAX_POSITIONS - len(existing_symbols)
     if slots_available <= 0:
         return
