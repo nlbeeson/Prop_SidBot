@@ -8,6 +8,8 @@ import pytz
 
 from config import *
 from fetch_earnings import weekly_maintenance
+from kill_switch import close_all_positions
+from mt5_check_daily_drawdown import is_drawdown_safe
 from mt5_earnings_shield import liquidate_earnings_risk
 from mt5_news_filter import is_trading_blocked
 from mt5_trailing_stops import apply_trailing_stop
@@ -73,19 +75,21 @@ async def market_monitor_task():
     """Runs every 5 minutes: Checks RSI exits and entry setups if not blocked."""
     while True:
         try:
-            # Always run exits in a separate thread
+            # 1. HARD KILL SWITCH: Check for catastrophic drawdown first
+            # We use a 4.7% limit to stay safely under the 5% firm rule
+            if not is_drawdown_safe(limit=0.047):
+                logger.critical("🚨 CRITICAL DRAWDOWN REACHED: ACTIVATING EMERGENCY KILL SWITCH")
+                # Import close_all_positions from your kill_switch.py
+                await asyncio.to_thread(close_all_positions)
+                # After killing trades, the bot will stay in this loop but run_entry_scan
+                # will naturally be blocked by is_drawdown_safe()
+
+            # 2. Standard Maintenance
             await asyncio.to_thread(run_exit_scan)
 
             if not TRADING_BLOCKED:
-                # Heavy stock/index scan must be threaded to prevent loop freezing
                 await asyncio.to_thread(run_entry_scan)
-            else:
-                logger.info("⏸️ Entry scan skipped: News Block Active.")
 
-        except Exception as e:
-            logger.error(f"❌ Error in Monitor Task: {e}")
-
-        await asyncio.sleep(EXIT_CHECK_INTERVAL)
 
 
 async def schedule_task(func, target_time_str, task_name, *args):
