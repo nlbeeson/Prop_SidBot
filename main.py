@@ -75,21 +75,29 @@ async def market_monitor_task():
     """Runs every 5 minutes: Checks RSI exits and entry setups if not blocked."""
     while True:
         try:
-            # 1. HARD KILL SWITCH: Check for catastrophic drawdown first
-            # We use a 4.7% limit to stay safely under the 5% firm rule
+            # 1. HARD KILL SWITCH: Check for catastrophic drawdown
+            # Using 4.7% limit to stay under the 5% firm rule
             if not is_drawdown_safe(limit=0.047):
                 logger.critical("🚨 CRITICAL DRAWDOWN REACHED: ACTIVATING EMERGENCY KILL SWITCH")
-                # Import close_all_positions from your kill_switch.py
                 await asyncio.to_thread(close_all_positions)
-                # After killing trades, the bot will stay in this loop but run_entry_scan
-                # will naturally be blocked by is_drawdown_safe()
+                # Note: Bot continues to loop but entries are blocked by is_drawdown_safe()
 
             # 2. Standard Maintenance
             await asyncio.to_thread(run_exit_scan)
 
             if not TRADING_BLOCKED:
                 await asyncio.to_thread(run_entry_scan)
+            else:
+                logger.info("⏸️ Entry scan skipped: News Block Active.")
 
+        except Exception as e:
+            # Catch all exceptions to prevent the background task from dying
+            logger.error(f"❌ Error in Monitor Task: {e}", exc_info=True)
+            # Optional: Add a small sleep here if the error might be persistent (like no internet)
+            await asyncio.sleep(10)
+
+        # Always wait for the interval before the next iteration
+        await asyncio.sleep(EXIT_CHECK_INTERVAL)
 
 
 async def schedule_task(func, target_time_str, task_name, *args):
