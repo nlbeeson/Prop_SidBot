@@ -164,38 +164,70 @@ def calculate_dynamic_stop(df, ticker, order_type):
     else:
         return max(curr_price + dist, df['high'].tail(3).max())
 
-
 def apply_trailing_stop():
-    """Loops through all open positions and updates SL based on ATR volatility."""
+    """Loops through all open positions and updates SL based on ATR volatility with stiffness check."""
     positions = mt5.positions_get()
     if not positions:
         return
 
     for pos in positions:
+        # Ensure we only manage trades opened by this bot
+        if pos.magic != MAGIC_NUMBER:
+            continue
+
         symbol = pos.symbol
         df = get_data(symbol)
         if df.empty or len(df) < 20:
             continue
 
-        # 1. Calculate ATR
+        # 1. Calculate ATR and Trail Distance
         df.ta.atr(length=14, append=True)
         atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
-
         if not atr_cols:
-            print(f"⚠️ ATR calculation failed for {symbol}")
-            continue
+                continue
 
         current_atr = df[atr_cols[-1]].iloc[-1]
         category = get_symbol_category(symbol)
-
         trail_dist = current_atr * VOLATILITY_MULT.get(category, 2.0)
 
-        # MOVE THESE INSIDE THE LOOP
         tick = mt5.symbol_info_tick(symbol)
-        if tick is None: continue
+        if tick is None:
+            continue
 
         current_sl = pos.sl
         new_sl = 0.0
+
+        # 2. Stiffness Check (0.1 * ATR)
+        # Only move SL if the improvement is at least 10% of the current ATR
+        stiffness_threshold = current_atr * 0.1
+
+        # 3. Logic for Long Positions
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            potential_sl = tick.bid - trail_dist
+            if potential_sl > current_sl + stiffness_threshold:
+                new_sl = potential_sl
+
+        # 4. Logic for Short Positions
+        elif pos.type == mt5.POSITION_TYPE_SELL:
+            potential_sl = tick.ask + trail_dist
+            # For shorts, current_sl is 0 if not set, or we move it DOWN
+            if current_sl == 0 or potential_sl < current_sl - stiffness_threshold:
+                new_sl = potential_sl
+
+        # 5. Execute Update
+        if new_sl > 0:
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": symbol,
+                "position": pos.ticket,
+                "sl": float(round(new_sl, 5)),
+                "tp": pos.tp,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            result = mt5.order_send(request)
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"📈 Trailing SL updated for {symbol} to {new_sl:.5f}")
 
         # 2. Logic for Long Positions
         if pos.type == mt5.POSITION_TYPE_BUY:
@@ -311,7 +343,7 @@ def close_position_and_orders(symbol):
                 "position": pos.ticket,  # MUST link to the original position
                 "price": price,
                 "deviation": 20,
-                "magic": 123456,
+                "magic": MAGIC_NUMBER,
                 "comment": "Bot Exit",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": filling_type,  # Immediate or Cancel
