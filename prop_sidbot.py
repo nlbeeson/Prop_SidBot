@@ -3,7 +3,7 @@ import csv
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 import MetaTrader5 as mt5
@@ -383,9 +383,21 @@ def run_exit_scan():
 
 # --- ENTRIES ---
 def run_entry_scan():
+    # 1. Existing Drawdown Check
     if not is_drawdown_safe():
         print("⏸️ Entry scan aborted: Daily drawdown limit reached.")
         return
+
+    # 2. NEW: Market Rollover / Maintenance Block (4:45 PM - 5:15 PM EST/Server Time)
+    # Note: Adjust the timezone based on whether your server/MT5 uses EST or UTC
+    now_time = datetime.now().time()
+    block_start = time(16, 50)  # 16:45 = 4:45 PM
+    block_end = time(17, 10)  # 17:15 = 5:15 PM
+
+    if block_start <= now_time <= block_end:
+        print(f"⏸️ Entry scan blocked: Market rollover period ({now_time}).")
+        return
+
     """Scans universe and enters positions using MT5."""
     run_exit_scan()
 
