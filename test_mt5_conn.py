@@ -1,4 +1,5 @@
 import MetaTrader5 as mt5
+import pandas_ta_classic
 
 from config import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
 from prop_sidbot import get_data
