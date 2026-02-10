@@ -5,7 +5,7 @@ import pandas as pd
 import pandas_ta_classic
 
 from config import *
-from prop_sidbot import get_symbol_category
+from utils import get_symbol_category
 
 logger = logging.getLogger("MT5Master")
 
@@ -54,6 +54,8 @@ def apply_trailing_stop():
                 "position": pos.ticket,
                 "sl": float(round(new_sl, 5)),
                 "tp": pos.tp,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
             }
             result = mt5.order_send(request)
             if result.retcode == mt5.TRADE_RETCODE_DONE:

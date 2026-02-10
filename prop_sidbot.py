@@ -12,6 +12,7 @@ import pandas as pd
 from config import *
 from mt5_check_daily_drawdown import is_drawdown_safe
 from mt5_news_filter import is_trading_blocked
+from utils import get_symbol_category
 # Import Watchlist
 from prop_watchlist import WATCHLIST
 
@@ -37,9 +38,9 @@ def initialize_mt5():
     server = os.getenv("MT5_SERVER")
 
     if not mt5.initialize(login=login, password=password, server=server):
-        print(f"Failed to initialize MT5: {mt5.last_error()}")
+        logger.error(f"Failed to initialize MT5: {mt5.last_error()}")
         sys.exit(1)
-    print(f"Connected to MT5: {mt5.account_info().login}")
+    logger.info(f"Connected to MT5: {mt5.account_info().login}")
 
 
 def mt5_shutdown():
@@ -49,10 +50,10 @@ def mt5_shutdown():
 def get_universe():
     try:
         # IMPORT MASTER WATCHLIST
-        print(f"✅ Loaded {len(WATCHLIST)} tickers from prop_watchlist.py")
+        logger.info(f"✅ Loaded {len(WATCHLIST)} tickers from prop_watchlist.py")
         return WATCHLIST
     except (ImportError, NameError):
-        print("⚠️ prop_watchlist.py not found. Using backup list.")
+        logger.warning("⚠️ prop_watchlist.py not found. Using backup list.")
         return FALLBACK_WATCHLIST
 
 
@@ -68,21 +69,6 @@ def get_data(ticker):
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.rename(columns={'time': 'timestamp'}, inplace=True)
     return df
-
-
-def get_symbol_category(symbol):
-    """Identifies category using unified config map and MT5 path."""
-    for key, category in CATEGORY_MAP.items():
-        if key in symbol:
-            return category
-
-    info = mt5.symbol_info(symbol)
-    if info:
-        path = info.path.upper()
-        if "FOREX" in path: return "FOREX"
-        if "STOCK" in path or "EQUITY" in path: return "STOCKS"
-        if "INDEX" in path or "INDICES" in path: return "INDICES"
-    return "FOREX"
 
 
 def is_instrument_enabled(symbol):
@@ -118,7 +104,7 @@ def is_earnings_safe(ticker):
     cache_path = Path(__file__).parent.resolve() / 'earnings_cache.json'
 
     if not cache_path.exists():
-        print(f"⚠️ Missing cache at {cache_path}. Blocking {ticker}.")
+        logger.warning(f"⚠️ Missing cache at {cache_path}. Blocking {ticker}.")
         return False
 
     try:
@@ -135,13 +121,13 @@ def is_earnings_safe(ticker):
         days_until = (next_earnings_date - today).days
 
         if 0 <= days_until <= 14:
-            print(f"[{ticker}] Earnings in {days_until} days ({next_earnings_date}). BLOCKING.")
+            logger.info(f"[{ticker}] Earnings in {days_until} days ({next_earnings_date}). BLOCKING.")
             return False
 
         return True
 
     except Exception as e:
-        print(f"[{ticker}] Earnings Check Error: {e}. BLOCKING.")
+        logger.error(f"[{ticker}] Earnings Check Error: {e}. BLOCKING.")
         return False
 
 
@@ -162,63 +148,6 @@ def calculate_dynamic_stop(df, ticker, order_type):
         return min(curr_price - dist, df['low'].tail(3).min())
     else:
         return max(curr_price + dist, df['high'].tail(3).max())
-
-
-def apply_trailing_stop():
-    """Loops through all open positions and updates SL based on ATR volatility with stiffness check."""
-    positions = mt5.positions_get()
-    if not positions:
-        return
-
-    for pos in positions:
-        if pos.magic != MAGIC_NUMBER:
-            continue
-
-        symbol = pos.symbol
-        df = get_data(symbol)
-        if df.empty or len(df) < 20:
-            continue
-
-        df.ta.atr(length=14, append=True)
-        atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
-        if not atr_cols:
-                continue
-
-        current_atr = df[atr_cols[-1]].iloc[-1]
-        category = get_symbol_category(symbol)
-        trail_dist = current_atr * VOLATILITY_MULT.get(category, 2.0)
-
-        tick = mt5.symbol_info_tick(symbol)
-        if tick is None:
-            continue
-
-        current_sl = pos.sl
-        new_sl = 0.0
-        stiffness_threshold = current_atr * 0.1
-
-        if pos.type == mt5.POSITION_TYPE_BUY:
-            potential_sl = tick.bid - trail_dist
-            if potential_sl > current_sl + stiffness_threshold:
-                new_sl = potential_sl
-
-        elif pos.type == mt5.POSITION_TYPE_SELL:
-            potential_sl = tick.ask + trail_dist
-            if current_sl == 0 or potential_sl < current_sl - stiffness_threshold:
-                new_sl = potential_sl
-
-        if new_sl > 0:
-            request = {
-                "action": mt5.TRADE_ACTION_SLTP,
-                "symbol": symbol,
-                "position": pos.ticket,
-                "sl": float(round(new_sl, 5)),
-                "tp": pos.tp,
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
-            }
-            result = mt5.order_send(request)
-            if result.retcode == mt5.TRADE_RETCODE_DONE:
-                print(f"📈 Trailing SL updated for {symbol} to {new_sl:.5f}")
 
 
 def get_current_currency_exposure(new_ticker):
@@ -266,11 +195,113 @@ def log_event(event_data):
         writer.writerow(event_data)
 
 
+def execute_mt5_trade(pick):
+    symbol = pick['ticker']
+    info = mt5.symbol_info(symbol)
+    if info is None: return
+
+    # 1. Filling Mode Logic
+    if info.filling_mode & 1:
+        filling_type = mt5.ORDER_FILLING_FOK
+    elif info.filling_mode & 2:
+        filling_type = mt5.ORDER_FILLING_IOC
+    else:
+        filling_type = mt5.ORDER_FILLING_RETURN
+
+    # 2. Spread Calculation
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None: return
+
+    pip_unit = 10 ** - (info.digits - 1)
+    current_spread = (tick.ask - tick.bid) / pip_unit
+
+    if current_spread > MAX_SPREAD_PIPS:
+        logger.warning(f"⚠️ Spread too high for {symbol}: {current_spread:.1f}")
+        log_event({
+            "symbol": symbol, "action": "SKIP", "status": "HIGH_SPREAD",
+            "spread_pips": round(current_spread, 2), "comment": "Spread Filter"
+        })
+        return
+
+    # 3. Dynamic Risk and Equity
+    effective_risk_pct = RISK_PER_TRADE_PCT * pick.get('risk_modifier', 1.0)
+    equity = mt5.account_info().equity
+    risk_cash = equity * effective_risk_pct
+
+    # 4. CROSS-PAIR CONVERSION LOGIC
+    # The risk per pip is natively in the quote currency (e.g., GBP for EURGBP)
+    price_dist = abs(pick['price'] - pick['stop_price'])
+    if price_dist == 0: return
+
+    base_risk_per_lot = price_dist * info.trade_contract_size
+    quote_currency = symbol[3:6]  # Works for 6-character Forex pairs
+
+    conversion_rate = 1.0
+    if quote_currency != "USD":
+        # Search for a conversion pair (e.g., if quote is GBP, we need GBPUSD)
+        conv_symbol = f"{quote_currency}USD"
+        conv_tick = mt5.symbol_info_tick(conv_symbol)
+
+        if conv_tick is not None:
+            conversion_rate = conv_tick.bid
+        else:
+            # Try the inverse (e.g., if quote is JPY, we need USDJPY)
+            conv_symbol = f"USD{quote_currency}"
+            conv_tick = mt5.symbol_info_tick(conv_symbol)
+            if conv_tick is not None and conv_tick.bid != 0:
+                conversion_rate = 1.0 / conv_tick.bid
+            else:
+                logger.error(f"❌ Conversion failed for {symbol}. Blocking trade.")
+                return
+
+    # 5. Final Lot Sizing
+    # raw_lots = USD Risk / (Quote Risk per Lot * Quote-to-USD rate)
+    raw_lots = risk_cash / (base_risk_per_lot * conversion_rate)
+
+    # Step-size normalization
+    lot = round(raw_lots / info.volume_step) * info.volume_step
+    lot = max(info.volume_min, min(info.volume_max, lot))
+
+    # 6. Send Order
+    order_type = pick['type']
+    price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": round(lot, 2),
+        "type": order_type,
+        "price": price,
+        "sl": float(pick['stop_price']),
+        "magic": MAGIC_NUMBER,
+        "comment": "Sid Bot Entry",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": filling_type,
+    }
+
+    result = mt5.order_send(request)
+
+    # 7. Log Result
+    status = "SUCCESS" if result.retcode == mt5.TRADE_RETCODE_DONE else f"FAIL_{result.retcode}"
+    log_event({
+        "symbol": symbol, "action": "BUY" if order_type == 0 else "SELL",
+        "status": status, "lots": round(lot, 2), "price": price,
+        "sl": pick['stop_price'], "spread_pips": round(current_spread, 2),
+        "comment": result.comment if result else "No Result"
+    })
+
+    if result.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info(f"✅ Trade executed: {symbol} ({lot} lots) at {price}")
+    else:
+        logger.error(f"❌ Trade failed: {result.comment}")
+
+
 # --- EXITS ---
 def close_position_and_orders(symbol):
     """Closes all positions and cancels pending orders for a symbol."""
     # 1. Cancel Pending Orders
     orders = mt5.orders_get(symbol=symbol)
+
     if orders:
         for order in orders:
             cancel_req = {
@@ -349,7 +380,7 @@ def run_exit_scan():
 def run_entry_scan():
     # 1. Existing Drawdown Check
     if not is_drawdown_safe():
-        print("⏸️ Entry scan aborted: Daily drawdown limit reached.")
+        logger.info("⏸️ Entry scan aborted: Daily drawdown limit reached.")
         return
 
     # 2. NEW: Market Rollover / Maintenance Block (4:45 PM - 5:15 PM EST/Server Time)
@@ -359,7 +390,7 @@ def run_entry_scan():
     block_end = time(17, 10)  # 17:15 = 5:15 PM
 
     if block_start <= now_time <= block_end:
-        print(f"⏸️ Entry scan blocked: Market rollover period ({now_time}).")
+        logger.info(f"⏸️ Entry scan blocked: Market rollover period ({now_time}).")
         return
 
     """Scans universe and enters positions using MT5."""
@@ -387,7 +418,7 @@ def run_entry_scan():
             currencies = [ticker[:3], ticker[3:]]
             blocked, reason = is_trading_blocked(currencies)
             if blocked:
-                print(f"🛑 NEWS BLOCK: Skipping {ticker} due to {reason}")
+                logger.warning(f"🛑 NEWS BLOCK: Skipping {ticker} due to {reason}")
                 continue
 
         if ticker in existing_symbols: continue
@@ -473,163 +504,6 @@ def run_entry_scan():
         else:
             # Still logs the "would-be" trade for your review
             logger.info(f"🔍 SIGNAL ONLY: {pick['ticker']} setup identified (RSI: {pick['score']:.1f})")
-
-    def execute_mt5_trade(pick):
-        symbol = pick['ticker']
-        info = mt5.symbol_info(symbol)
-        if info is None: return
-
-        # 1. Filling Mode Logic
-        if info.filling_mode & 1:
-            filling_type = mt5.ORDER_FILLING_FOK
-        elif info.filling_mode & 2:
-            filling_type = mt5.ORDER_FILLING_IOC
-        else:
-            filling_type = mt5.ORDER_FILLING_RETURN
-
-        # 2. Spread Calculation
-        tick = mt5.symbol_info_tick(symbol)
-        if tick is None: return
-
-        pip_unit = 10 ** - (info.digits - 1)
-        current_spread = (tick.ask - tick.bid) / pip_unit
-
-        if current_spread > MAX_SPREAD_PIPS:
-            print(f"⚠️ Spread too high for {symbol}: {current_spread:.1f}")
-            log_event({
-                "symbol": symbol, "action": "SKIP", "status": "HIGH_SPREAD",
-                "spread_pips": round(current_spread, 2), "comment": "Spread Filter"
-            })
-            return
-
-        # 3. Dynamic Risk and Equity
-        effective_risk_pct = RISK_PER_TRADE_PCT * pick.get('risk_modifier', 1.0)
-        equity = mt5.account_info().equity
-        risk_cash = equity * effective_risk_pct
-
-        # 4. CROSS-PAIR CONVERSION LOGIC
-        # The risk per pip is natively in the quote currency (e.g., GBP for EURGBP)
-        price_dist = abs(pick['price'] - pick['stop_price'])
-        if price_dist == 0: return
-
-        base_risk_per_lot = price_dist * info.trade_contract_size
-        quote_currency = symbol[3:6]  # Works for 6-character Forex pairs
-
-        conversion_rate = 1.0
-        if quote_currency != "USD":
-            # Search for a conversion pair (e.g., if quote is GBP, we need GBPUSD)
-            conv_symbol = f"{quote_currency}USD"
-            conv_tick = mt5.symbol_info_tick(conv_symbol)
-
-            if conv_tick is not None:
-                conversion_rate = conv_tick.bid
-            else:
-                # Try the inverse (e.g., if quote is JPY, we need USDJPY)
-                conv_symbol = f"USD{quote_currency}"
-                conv_tick = mt5.symbol_info_tick(conv_symbol)
-                if conv_tick is not None and conv_tick.bid != 0:
-                    conversion_rate = 1.0 / conv_tick.bid
-                else:
-                    logger.error(f"❌ Conversion failed for {symbol}. Blocking trade.")
-                    return
-
-        # 5. Final Lot Sizing
-        # raw_lots = USD Risk / (Quote Risk per Lot * Quote-to-USD rate)
-        raw_lots = risk_cash / (base_risk_per_lot * conversion_rate)
-
-        # Step-size normalization
-        lot = round(raw_lots / info.volume_step) * info.volume_step
-        lot = max(info.volume_min, min(info.volume_max, lot))
-
-        # 6. Send Order
-        order_type = pick['type']
-        price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": round(lot, 2),
-            "type": order_type,
-            "price": price,
-            "sl": float(pick['stop_price']),
-            "magic": MAGIC_NUMBER,
-            "comment": "Sid Bot Entry",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": filling_type,
-        }
-
-        result = mt5.order_send(request)
-
-        # 7. Log Result
-        status = "SUCCESS" if result.retcode == mt5.TRADE_RETCODE_DONE else f"FAIL_{result.retcode}"
-        log_event({
-            "symbol": symbol, "action": "BUY" if order_type == 0 else "SELL",
-            "status": status, "lots": round(lot, 2), "price": price,
-            "sl": pick['stop_price'], "spread_pips": round(current_spread, 2),
-            "comment": result.comment if result else "No Result"
-        })
-
-        if result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ Trade executed: {symbol} ({lot} lots) at {price}")
-        else:
-            print(f"❌ Trade failed: {result.comment}")
-
-    # Dynamic Risk Calculation
-    # 1. Apply the dynamic risk modifier (from the 'pick' dictionary)
-    # If no modifier is provided, it defaults to 1.0 (100% risk)
-    effective_risk_pct = RISK_PER_TRADE_PCT * pick.get('risk_modifier', 1.0)
-
-    # 2. Risk-Based Lot Calculation
-    # Calculate cash risk based on the modified percentage
-    equity = mt5.account_info().equity
-    risk_cash = equity * effective_risk_pct
-
-    # 3. Final Lot Sizing
-    price_dist = abs(pick['price'] - pick['stop_price'])
-    if price_dist == 0: return
-
-    # Scale by contract size: FX (100k), Gold (100), Indices (1)
-    raw_lots = risk_cash / (price_dist * info.trade_contract_size)
-
-    # Step-size normalization
-    lot = round(raw_lots / info.volume_step) * info.volume_step
-    lot = max(info.volume_min, min(info.volume_max, lot))
-
-    # 3. Send Order
-    order_type = pick['type']
-    price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": round(lot, 2),
-        "type": order_type,
-        "price": price,
-        "sl": float(pick['stop_price']),
-        "magic": MAGIC_NUMBER,
-        "comment": "Sid Bot Entry",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": filling_type,
-    }
-
-    result = mt5.order_send(request)
-
-    # 4. Log Result
-    status = "SUCCESS" if result.retcode == mt5.TRADE_RETCODE_DONE else f"FAIL_{result.retcode}"
-    log_event({
-        "symbol": symbol, "action": "BUY" if order_type == 0 else "SELL",
-        "status": status, "lots": round(lot, 2), "price": price,
-        "sl": pick['stop_price'], "spread_pips": round(current_spread, 2),
-        "comment": result.comment if result else "No Result"
-    })
-
-    if result.retcode == mt5.TRADE_RETCODE_DONE:
-        print(f"✅ Trade executed: {symbol} at {price}")
-    else:
-        print(f"❌ Trade failed: {result.comment}")
-
-
-if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MT5 Forex Sid Method Trading Bot')
     parser.add_argument('--mode', type=str, required=True, choices=['entry', 'exit', 'trail'],
                         help='entry: daily scan, exit: RSI targets, trail: move stop losses')
@@ -652,12 +526,12 @@ if __name__ == "__main__":
         # --- EXECUTION MODES ---
         if args.mode == 'trail':
             # Fast check: Move stop losses based on ATR volatility
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Running Trailing Stop Update...")
+            logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Running Trailing Stop Update...")
             apply_trailing_stop()
 
         elif args.mode == 'exit':
             # Hourly check: Close positions if RSI crosses 50
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Running RSI Exit Scan...")
+            logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Running RSI Exit Scan...")
             run_exit_scan()
 
         elif args.mode == 'entry':
@@ -665,7 +539,7 @@ if __name__ == "__main__":
             run_entry_scan()
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
     finally:
         mt5_shutdown()
-        print("MT5 connection closed.")
+        logger.info("MT5 connection closed.")
