@@ -9,7 +9,7 @@ import pytz
 from config import *
 from fetch_earnings import weekly_maintenance
 from kill_switch import close_all_positions
-from mt5_check_daily_drawdown import is_drawdown_safe
+from risk_management import is_drawdown_safe
 from mt5_earnings_shield import liquidate_earnings_risk
 from mt5_news_filter import is_trading_blocked
 from mt5_trailing_stops import apply_trailing_stop
