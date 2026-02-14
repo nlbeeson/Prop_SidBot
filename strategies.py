@@ -1,100 +1,191 @@
-import logging
-from typing import List
-
 import MetaTrader5 as mt5
-from config import stocks, forex, crypto, indices, commodities  # adjust as needed
-from data_provider import get_universe
+import pandas as pd
+import logging
+from datetime import datetime, time
 
-logger = logging.getLogger(__name__)
+from config import *
+from risk_management import is_drawdown_safe, is_earnings_safe, get_current_currency_exposure, is_instrument_enabled
+from mt5_news_filter import is_trading_blocked
+from utils import get_symbol_category
+from data_provider import get_data, get_universe
+from trade_executor import execute_mt5_trade, close_position_and_orders
 
-# -------------------------------
-# Helper — Asset Filtering
-# -------------------------------
-def is_tradable_symbol(symbol: str) -> bool:
-    """
-    Return True if a symbol should be scanned based on config flags.
-    This assumes MT5 symbol names include asset class prefixes or patterns.
-    Modify patterns if your tickers differ.
-    """
-    sym = symbol.upper()
+logger = logging.getLogger("MT5MasterControl")
 
-    # Stocks: tickers with letters but no typical forex/crypto suffix
-    if not stocks and all(c.isalpha() for c in sym) and len(sym) <= 5:
-        return False
 
-    # Forex: usually 6-character pairs like EURUSD, GBPJPY
-    if not forex and len(sym) == 6 and sym.isalpha():
-        return False
+def calculate_dynamic_stop(df, ticker, order_type):
+    """Calculates SL using unified VOLATILITY_MULT from config."""
+    df.ta.atr(length=14, append=True)
+    atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
+    if not atr_cols: return None
 
-    # Crypto: most exchange crypto symbols have USD/USDT suffixes or BTC/ETH base
-    if not crypto and ("USD" in sym or "BTC" in sym or "ETH" in sym):
-        # crude check only; you can refine for exact formats
-        return False
+    atr = df[atr_cols[-1]].iloc[-1]
+    curr_price = df['close'].iloc[-1]
 
-    # Indices: common index names like SP500, NAS100, US30, DAX40, etc.
-    if not indices and any(idx in sym for idx in ["500","100","30","40","DAX","NDX"]):
-        return False
+    category = get_symbol_category(ticker)
+    multiplier = VOLATILITY_MULT.get(category, 2.0)
+    dist = atr * multiplier
 
-    # Commodities: typical commodity suffixes
-    if not commodities and any(comm in sym for comm in ["XAU","XAG","OIL","GAS"]):
-        return False
+    if order_type == mt5.ORDER_TYPE_BUY:
+        return min(curr_price - dist, df['low'].tail(3).min())
+    else:
+        return max(curr_price + dist, df['high'].tail(3).max())
 
-    return True
 
-# -------------------------------
-# Entry Scan Logic
-# -------------------------------
-def run_entry_scan():
-    """
-    Loop through universe and call your existing entry logic only
-    for symbols enabled by config.  Replace placeholder scan logic
-    with your actual entry conditions/callouts.
-    """
-    try:
-        universe: List[str] = get_universe()
-        if not universe:
-            logger.info("[SCAN] No universe loaded; skipping entry scan.")
-            return
-
-        count_scanned = 0
-        for symbol in universe:
-            if not is_tradable_symbol(symbol):
-                # Skip this symbol because its asset class is disabled
-                logger.debug(f"[SKIP] {symbol} skipped due to config flags.")
-                continue
-
-            # Perform your actual entry scan logic for this symbol
-            count_scanned += 1
-            try:
-                # Example: call your existing entry scanning function
-                # Replace with your own logic as needed:
-                logger.info(f"[SCAN] Checking {symbol} for entry conditions.")
-                # your real scan function here, e.g.:
-                # evaluate_entry(symbol)
-            except Exception as e:
-                logger.error(f"[ERROR] Exception scanning {symbol}: {e}")
-
-        logger.info(f"[SCAN COMPLETE] Scanned {count_scanned} tradable symbols.")
-
-    except Exception as exc:
-        logger.error(f"[ERROR] Failed during entry scan: {exc}")
-
-# -------------------------------
-# Exit Scan Logic (if exists)
-# -------------------------------
 def run_exit_scan():
-    """
-    Loop through open positions and handle exit logic.
-    You likely already have this in your main code; ensure it is also
-    filtered similarly based on tradability if needed.
-    """
-    # Example placeholder; replace with your actual exit logic
+    """Checks positions and closes only if RSI 50 is hit AND momentum stalls."""
     positions = mt5.positions_get()
-    if positions:
-        for pos in positions:
-            sym = pos.symbol
-            if not is_tradable_symbol(sym):
-                logger.debug(f"[EXIT SKIP] {sym} excluded from exit logic by config.")
+    if not positions: return
+
+    for pos in positions:
+        if pos.magic != MAGIC_NUMBER: continue  # Use constant from config
+
+        rates = mt5.copy_rates_from_pos(pos.symbol, mt5.TIMEFRAME_D1, 0, 50)
+        if rates is None: continue
+
+        df = pd.DataFrame(rates)
+        df.ta.rsi(length=14, append=True)
+
+        curr_rsi = df['RSI_14'].iloc[-1]
+        prev_rsi = df['RSI_14'].iloc[-2]
+
+        # LONG EXIT: RSI hit 50, but only exit if RSI is no longer rising
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            if curr_rsi >= 50 and curr_rsi <= prev_rsi:
+                logger.info(f"💰 EXIT LONG: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
+                close_position_and_orders(pos.symbol)
+
+        # SHORT EXIT: RSI hit 50, but only exit if RSI is no longer falling
+        elif pos.type == mt5.POSITION_TYPE_SELL:
+            if curr_rsi <= 50 and curr_rsi >= prev_rsi:
+                logger.info(f"💰 EXIT SHORT: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
+                close_position_and_orders(pos.symbol)
+
+
+def run_entry_scan():
+    # 1. Existing Drawdown Check
+    if not is_drawdown_safe():
+        logger.info("⏸️ Entry scan aborted: Daily drawdown limit reached.")
+        return
+
+    # 2. NEW: Market Rollover / Maintenance Block (4:45 PM - 5:15 PM EST/Server Time)
+    # Note: Adjust the timezone based on whether your server/MT5 uses EST or UTC
+    now_time = datetime.now().time()
+    block_start = time(16, 50)  # 16:45 = 4:45 PM
+    block_end = time(17, 10)  # 17:15 = 5:15 PM
+
+    if block_start <= now_time <= block_end:
+        logger.info(f"⏸️ Entry scan blocked: Market rollover period ({now_time}).")
+        return
+
+    """Scans universe and enters positions using MT5."""
+    run_exit_scan()
+
+    positions = mt5.positions_get()
+    existing_symbols = {p.symbol for p in positions} if positions else set()
+
+    slots_available = MAX_POSITIONS - len(existing_symbols)
+    if slots_available <= 0:
+        return
+
+    universe = get_universe()
+    candidates = []
+
+    for ticker in universe:
+        # Check if this instrument type is currently enabled
+        if not is_instrument_enabled(ticker):
+            continue
+
+        # --- News Filter Integration ---
+        category = get_symbol_category(ticker)
+        if category == "FOREX":
+            # Extract currency components (e.g., 'EURUSD' -> ['EUR', 'USD'])
+            currencies = [ticker[:3], ticker[3:]]
+            blocked, reason = is_trading_blocked(currencies)
+            if blocked:
+                logger.warning(f"🛑 NEWS BLOCK: Skipping {ticker} due to {reason}")
                 continue
-            # your real exit logic here
-            logger.info(f"[EXIT] Evaluating exit for {sym}")
+
+        if ticker in existing_symbols: continue
+
+        df = get_data(ticker)
+        if df.empty or len(df) < 50: continue
+
+        # Technical Analysis (RSI, MACD, Weekly RSI)
+        df.ta.rsi(length=14, append=True)
+        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        macd_col = df.columns[-3]
+
+        weekly = df.resample('W-FRI', on='timestamp').agg({'close': 'last'}).dropna()
+        if len(weekly) < 2: continue
+        weekly.ta.rsi(length=14, append=True)
+
+        curr, prev = df.iloc[-1], df.iloc[-2]
+        wk_rising = weekly.iloc[-1]['RSI_14'] > weekly.iloc[-2]['RSI_14']
+        wk_falling = weekly.iloc[-1]['RSI_14'] < weekly.iloc[-2]['RSI_14']
+        rsi_history = df['RSI_14'].tail(SIGNAL_DAYS)
+
+        # LONG Logic
+        if (curr['RSI_14'] <= 45 and curr['RSI_14'] > prev['RSI_14'] and
+                curr[macd_col] > prev[macd_col] and wk_rising and (rsi_history < 30).any()):
+
+            # Only run earnings check for stocks
+            category = get_symbol_category(ticker)
+            earnings_ok = is_earnings_safe(ticker) if category == "STOCKS" else True
+
+            if earnings_ok:
+                # Use the dynamic stop loss
+                stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_BUY)
+
+                candidates.append({
+                    'ticker': ticker, 'type': mt5.ORDER_TYPE_BUY,
+                    'score': curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price
+                })
+
+        # SHORT Logic
+        elif ALLOW_SHORTS and (curr['RSI_14'] >= 55 and curr['RSI_14'] < prev['RSI_14'] and
+                               curr[macd_col] < prev[macd_col] and wk_falling and (rsi_history > 70).any()):
+
+            # Only run earnings check for stocks
+            category = get_symbol_category(ticker)
+            earnings_ok = is_earnings_safe(ticker) if category == "STOCKS" else True
+
+            if earnings_ok:
+                # Use the dynamic stop loss
+                stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_SELL)
+
+                candidates.append({
+                    'ticker': ticker, 'type': mt5.ORDER_TYPE_SELL,
+                    'score': 100 - curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price
+                })
+
+    # --- SORTING LOGIC ---
+    # Sort by score: Best Longs (lowest RSI) and Best Shorts (highest RSI) first
+    candidates.sort(key=lambda x: x['score'])
+    top_picks = candidates[:slots_available]
+
+    for pick in top_picks:
+        ticker = pick['ticker']
+        category = get_symbol_category(ticker)
+
+        # Apply risk correlation logic only to Forex pairs
+        if category == "FOREX":
+            exposure = get_current_currency_exposure(ticker)
+
+            if exposure >= MAX_CURRENCY_EXPOSURE:
+                if CORRELATION_MODE == 'BLOCK':
+                    logger.warning(f"🚫 CORRELATION BLOCK: {ticker} skipped. Max exposure reached.")
+                    continue
+                elif CORRELATION_MODE == 'REDUCE':
+                    logger.info(f"⚠️ CORRELATION RISK: Reducing size for {ticker}.")
+                    pick['risk_modifier'] = CORRELATION_RISK_MODIFIER
+            else:
+                pick['risk_modifier'] = 1.0
+        else:
+            pick['risk_modifier'] = 1.0
+
+        if TRADE_ALLOWED:
+            execute_mt5_trade(pick)
+        else:
+            # Still logs the "would-be" trade for your review
+            logger.info(f"🔍 SIGNAL ONLY: {pick['ticker']} setup identified (RSI: {pick['score']:.1f})")
