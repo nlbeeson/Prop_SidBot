@@ -17,8 +17,8 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 
 # --- TRADABLE INSTRUMENT TOGGLES ---
 TRADE_SETTINGS = {
-    "FOREX": True, "STOCKS": True, "METALS": True,
-    "INDICES": True, "CRYPTO": False
+    "FOREX": True, "STOCKS": False, "METALS": True,
+    "INDICES": False, "CRYPTO": False
 }
 
 # --- STRATEGY & RISK ---
