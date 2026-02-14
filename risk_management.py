@@ -89,10 +89,12 @@ def get_current_currency_exposure(new_ticker):
     return exposure_count
 
 
-def is_drawdown_safe():
+def is_drawdown_safe(limit=None):  # Add 'limit=None' to accept the argument from main.py
     """Checks if the current daily drawdown exceeds the allowed limit using MT5 history."""
     try:
-        # 1. Get current account state
+        # Use the passed limit (0.047) if available, otherwise fall back to config
+        drawdown_limit = limit if limit is not None else MAX_DAILY_DRAWDOWN_PCT
+
         account = mt5.account_info()
         if account is None:
             logger.error("❌ Could not retrieve account info for drawdown check.")
@@ -100,28 +102,28 @@ def is_drawdown_safe():
 
         current_equity = account.equity
 
-        # 2. Calculate Start-of-Day Balance
-        # We fetch all deals from today's midnight to now
+        # Calculate Start-of-Day Balance
         today_start = datetime.combine(datetime.now().date(), time.min)
         history_deals = mt5.history_deals_get(today_start, datetime.now())
 
-        # Sum up all realized profit, commissions, and swaps from today
         today_realized_pl = 0
         if history_deals:
             for deal in history_deals:
                 today_realized_pl += (deal.profit + deal.commission + deal.fee + deal.swap)
 
-        # The 'Start-of-Day' reference is the current balance minus what was gained/lost today
         start_of_day_balance = account.balance - today_realized_pl
 
         if start_of_day_balance <= 0:
             return True
 
-        # 3. Calculate current drawdown (including floating P/L)
+        # Calculate current drawdown percentage
         current_drawdown = (start_of_day_balance - current_equity) / start_of_day_balance
 
-        if current_drawdown >= MAX_DAILY_DRAWDOWN_PCT:
-            logger.warning(f"⚠️ DRAWDOWN ALERT: Current loss ({current_drawdown:.2%}) exceeds limit.")
+        # --- KEEP THIS UPDATED BLOCK ---
+        # It now compares against the dynamic 'drawdown_limit'
+        if current_drawdown >= drawdown_limit:
+            logger.warning(
+                f"⚠️ DRAWDOWN ALERT: Current loss ({current_drawdown:.2%}) exceeds limit ({drawdown_limit:.2%}).")
             return False
 
         return True
