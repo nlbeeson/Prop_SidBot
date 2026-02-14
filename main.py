@@ -1,7 +1,8 @@
 import asyncio
-import logging
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
+import logging
+import os
 
 import MetaTrader5 as mt5
 import pytz
@@ -21,6 +22,22 @@ from prop_sidbot import run_entry_scan, run_exit_scan
 # Get the directory where THIS script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 log_path = os.path.join(BASE_DIR, "mt5_prop_activity.log")
+
+
+# Ensure logs folder exists
+log_dir = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(log_dir, exist_ok=True)
+
+# Logging configuration
+logging.basicConfig(
+    filename=os.path.join(log_dir, "bot_activity.log"),
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# Example startup log
+logging.info("Bot started successfully")
 
 # Update your handler to use 'log_path'
 logging.basicConfig(
