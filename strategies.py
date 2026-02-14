@@ -1,62 +1,64 @@
 import logging
-from datetime import datetime
-from .data_provider import get_universe
+from data_provider import get_universe, get_account_info
 
 logger = logging.getLogger(__name__)
 
-# Example constants (replace with your actual ones)
-DAILY_DRAWDOWN_LIMIT = 1000
-WATCHLIST = []
+# ------------------------
+# Strategy Functions
+# ------------------------
+def check_drawdown_limit() -> bool:
+    """
+    Return True if daily drawdown limit reached.
+    """
+    try:
+        account = get_account_info()
+        if not account:
+            return True  # abort if account info not available
 
-# --- Logging-safe helper ---
-def log_info(message: str):
-    """Use ASCII-safe logging instead of emojis for Windows."""
-    logger.info(message)
+        # Example: 2% daily drawdown limit
+        daily_drawdown_limit = 0.02
+        equity = account.get("equity", 0)
+        balance = account.get("balance", 0)
+        if balance <= 0:
+            return True  # prevent division by zero
 
-def log_error(message: str):
-    """ASCII-safe error logging."""
-    logger.error(message)
+        drawdown = (balance - equity) / balance
+        if drawdown >= daily_drawdown_limit:
+            logger.info("[INFO] Entry scan aborted: Daily drawdown limit reached.")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"[ERROR] Drawdown check failed: {e}")
+        return True  # fail-safe abort
 
-# --- Strategy Functions ---
 def run_entry_scan():
     """
-    Scan for trading entries.
-    On Windows, emojis are removed for logging safety.
+    Run the main entry scan logic.
     """
+    if check_drawdown_limit():
+        return  # stop scanning if drawdown limit reached
+
     try:
-        # Check daily drawdown
-        account_drawdown = get_account_drawdown()  # Replace with your actual function
-        if account_drawdown > DAILY_DRAWDOWN_LIMIT:
-            log_info("ENTRY SCAN PAUSED: Daily drawdown limit reached.")
+        tickers = get_universe()
+        if not tickers:
+            logger.error("[ERROR] No tickers loaded; skipping entry scan.")
             return
 
-        # Get universe of tickers
-        universe = get_universe()
-        log_info(f"Loaded {len(universe)} tickers from watchlist.")
-
-        # Simulate entry logic
-        for ticker in universe:
-            log_info(f"[SCAN] Evaluating {ticker} for potential trade.")
+        # TODO: Replace with your actual entry logic
+        for ticker in tickers:
+            # Placeholder for actual scanning logic
+            logger.info(f"[SCAN] Scanned {ticker} for entry conditions.")
 
     except Exception as e:
-        log_error(f"Error during entry scan: {e}")
-
-def get_account_drawdown():
-    """
-    Dummy function for example.
-    Replace with actual MT5 account query.
-    """
-    try:
-        # Imagine this queries account info
-        return 500  # example drawdown
-    except Exception:
-        log_error("Could not retrieve account info for drawdown check.")
-        return DAILY_DRAWDOWN_LIMIT + 1  # force pause
+        logger.error(f"[ERROR] Exception during entry scan: {e}")
 
 def run_weekly_maintenance():
-    """Weekly maintenance tasks."""
+    """
+    Run weekly maintenance tasks.
+    """
     try:
-        log_info("WEEKLY MAINTENANCE: Performing scheduled cleanup and updates.")
-        # Add your maintenance logic here
+        # Example maintenance: log the number of tickers
+        tickers = get_universe()
+        logger.info(f"[MAINTENANCE] Weekly maintenance completed for {len(tickers)} tickers.")
     except Exception as e:
-        log_error(f"Error during weekly maintenance: {e}")
+        logger.error(f"[ERROR] Weekly maintenance failed: {e}")
