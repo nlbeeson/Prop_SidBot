@@ -1,19 +1,19 @@
 @echo off
-:: Log the attempt for debugging
-echo [%date% %time%] Attempting to start MT5... >> startup_debug.log
+:: Log the start of the script for visibility
+echo [%date% %time%] Launching BeeTrader...
 
-:: Start MT5 using the absolute path
-start "" "C:\Trading\TradingTerminals\terminal64.exe" /portable
+:: 1. Move to the MT5 directory and start terminal
+:: Using absolute paths is the most reliable method for VPS startup
+cd /d "C:\Trading\TradingTerminals\MT5_1"
+start "" "C:\Trading\TradingTerminals\MT5_1\terminal64.exe" /portable
 
-:: Headless-friendly 30-second wait for MT5 to initialize
+:: 2. Wait 30 seconds for MT5 to establish a broker connection
+:: PING is used here as it is often more stable in startup environments than TIMEOUT
 ping 127.0.0.1 -n 31 > nul
 
-echo [%date% %time%] Attempting to start Python... >> startup_debug.log
-
-:: Move to the bot directory
+:: 3. Move to the Bot directory
 cd /d "C:\Trading\Bots\Bot_1"
 
-:: Launch Python using the absolute path to the venv
-"C:\Trading\Bots\Bot_1\venv\Scripts\pythonw.exe" "main.py"
-
-echo [%date% %time%] Batch execution complete. >> startup_debug.log
+:: 4. Launch Python using the absolute path to the virtual environment
+:: Use 'python.exe' instead of 'pythonw.exe' for now so you can see the window
+"C:\Trading\Bots\Bot_1\venv\Scripts\python.exe" "C:\Trading\Bots\Bot_1\main.py"
