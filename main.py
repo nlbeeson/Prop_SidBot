@@ -149,7 +149,7 @@ async def schedule_weekly_task(func, target_day, target_time_str, task_name):
 
 
 async def main():
-    if not mt5.initialize(login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
+    if not mt5.initialize(path=MT5_PATH, portable=True, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
         logger.error(f"❌ MT5 Initialization Failed: {mt5.last_error()}")
         return
 
