@@ -18,11 +18,16 @@ from prop_sid_advisor import run_advisor_scan, send_admin_heartbeat
 from prop_sidbot import run_entry_scan, run_exit_scan
 
 # Logging Configuration
+# Get the directory where THIS script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+log_path = os.path.join(BASE_DIR, "mt5_prop_activity.log")
+
+# Update your handler to use 'log_path'
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        RotatingFileHandler("mt5_prop_activity.log", maxBytes=5000000, backupCount=5),
+        RotatingFileHandler(log_path, maxBytes=5000000, backupCount=5),
         logging.StreamHandler()
     ]
 )
