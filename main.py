@@ -149,17 +149,30 @@ async def schedule_weekly_task(func, target_day, target_time_str, task_name):
 
 
 async def main():
+    # Use the portable path from your config
     if not mt5.initialize(path=MT5_PATH, portable=True, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
         logger.error(f"❌ MT5 Initialization Failed: {mt5.last_error()}")
         return
 
-    logger.info("💎 MT5 PROP MASTER CONTROL ONLINE")
+    # --- NEW: ALGO TRADING SAFETY CHECKS ---
+    terminal_info = mt5.terminal_info()
+    account_info = mt5.account_info()
+
+    if not terminal_info.trade_allowed:
+        logger.critical("⚠️ ALGO TRADING IS DISABLED: Check MT5 Options > Expert Advisors.")
+        return
+
+    if not account_info.trade_allowed:
+        logger.critical("❌ ACCOUNT TRADING DISABLED: Check 5ers dashboard for violations or maintenance.")
+        return
+
+    logger.info("💎 MT5 PROP MASTER CONTROL ONLINE (Algo Trading Enabled)")
 
     # Group all tasks to run concurrently
     await asyncio.gather(
-        high_frequency_risk_task(),  # SL Updates & News
-        market_monitor_task(),  # Entry/Exit Scans
-        schedule_task(liquidate_earnings_risk, "15:45", "Earnings Shield"),  # Daily Stock Protection
+        high_frequency_risk_task(),
+        market_monitor_task(),
+        schedule_task(liquidate_earnings_risk, "15:45", "Earnings Shield"),
         schedule_task(send_admin_heartbeat, "09:45", "Admin Heartbeat"),
         schedule_task(run_advisor_scan, "15:00", "Daily Advisor"),
         schedule_weekly_task(weekly_maintenance, "Monday", "00:00", "Weekly Maintenance")
