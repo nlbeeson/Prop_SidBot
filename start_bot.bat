@@ -1,11 +1,11 @@
 @echo off
-:: Move to the MT5 directory first
-cd /d "C:\Trading\TradingTerminals"
-start "" "terminal64.exe" /portable
-
-:: Wait for MT5 to load
-timeout /t 20 /nobreak
-
-:: Move to the Bot directory before launching Python
 cd /d "C:\Trading\Bots\Bot_1"
-"C:\Trading\Bots\Bot_1\venv\Scripts\pythonw.exe" "main.py"
+echo [%date% %time%] Batch started >> debug_log.txt
+
+:: Try to start MT5 and log errors
+start "" "C:\Trading\TradingTerminals\terminal64.exe" /portable 2>> debug_log.txt
+
+:: Try to start Python and log errors
+"C:\Trading\Bots\Bot_1\venv\Scripts\pythonw.exe" "main.py" 2>> debug_log.txt
+
+echo [%date% %time%] Batch finished >> debug_log.txt
