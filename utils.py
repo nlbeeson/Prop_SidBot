@@ -17,6 +17,8 @@ def get_symbol_category(symbol):
         if "FOREX" in path: return "FOREX"
         if "STOCK" in path or "EQUITY" in path: return "STOCKS"
         if "INDEX" in path or "INDICES" in path: return "INDICES"
+        if "COMMODITY" in path or "OIL" in path or "ENERGY" in path: return "COMMODITIES"
+        if "CRYPTO" in path: return "CRYPTO"
     return "FOREX"
 
 

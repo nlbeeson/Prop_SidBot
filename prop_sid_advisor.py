@@ -6,12 +6,13 @@ from pathlib import Path
 
 import MetaTrader5 as mt5
 import pandas as pd
-import pandas_ta_classic
 import plotly.graph_objects as go
 import resend
 from plotly.subplots import make_subplots
 
 from config import *
+from utils import get_symbol_category
+from risk_management import is_instrument_enabled
 
 # --- INITIALIZATION ---
 load_dotenv()
@@ -38,27 +39,35 @@ def get_data(ticker):
     df = pd.DataFrame(rates)
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.rename(columns={'time': 'timestamp'}, inplace=True)
+    # Ensure pandas_ta can be used
+    try:
+        import pandas_ta as ta
+    except ImportError:
+        pass
     return df
 
 
-def get_symbol_category(symbol):
-    info = mt5.symbol_info(symbol)
-    if info is None: return "UNKNOWN"
-    path = info.path.upper()
-    if "XAU" in symbol or "XAG" in symbol: return "METALS"
-    if "FOREX" in path: return "FOREX"
-    if "STOCK" in path or "EQUITY" in path: return "STOCKS"
-    if "INDEX" in path or "INDICES" in path: return "INDICES"
-    if "CRYPTO" in path: return "CRYPTO"
-    return "FOREX"
 
 
 def calculate_dynamic_stop(df, ticker, order_type):
-    df.ta.atr(length=14, append=True)
-    atr = df.iloc[-1][df.columns[df.columns.str.contains('ATR')][-1]]
+    # Try to import pandas_ta if not already available in df
+    try:
+        import pandas_ta as ta
+        df.ta.atr(length=14, append=True)
+    except Exception:
+        pass
+    
+    atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
+    if not atr_cols:
+        # Fallback if ATR calculation failed
+        return df['close'].iloc[-1] * 0.99 if order_type == mt5.ORDER_TYPE_BUY else df['close'].iloc[-1] * 1.01
+
+    atr = df[atr_cols[-1]].iloc[-1]
     curr_price = df['close'].iloc[-1]
 
-    dist = atr * VOLATILITY_MULT.get(get_symbol_category(ticker), 2.0)
+    category = get_symbol_category(ticker)
+    multiplier = VOLATILITY_MULT.get(category, 2.0)
+    dist = atr * multiplier
 
     if order_type == mt5.ORDER_TYPE_BUY:
         return min(curr_price - dist, df['low'].tail(3).min())
@@ -239,12 +248,17 @@ def run_advisor_scan():
     equity = mt5.account_info().equity
 
     for sector, tickers in WATCHLIST_SECTORS.items():
+        # Check if this instrument type is currently enabled
+        # Using a dummy symbol for the sector to check if it's enabled
         if not TRADE_SETTINGS.get(sector.upper(), False):
             sector_stats[sector] = 0
             continue
 
         count = 0
         for ticker in tickers:
+            if not is_instrument_enabled(ticker):
+                continue
+                
             df = get_data(ticker)
             if df.empty or len(df) < 50: continue
             count += 1

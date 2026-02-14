@@ -13,7 +13,10 @@ logger = logging.getLogger("MT5MasterControl")
 def is_instrument_enabled(symbol):
     """
     Returns True if the category for the given symbol is enabled in TRADE_SETTINGS.
+    Also respects the global TRADE_ALLOWED toggle.
     """
+    if not TRADE_ALLOWED:
+        return False
     category = get_symbol_category(symbol)
     return TRADE_SETTINGS.get(category, False)
 

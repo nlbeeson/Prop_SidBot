@@ -137,37 +137,35 @@ def run_entry_scan():
         if (curr['RSI_14'] <= 45 and curr['RSI_14'] > prev['RSI_14'] and
                 curr[macd_col] > prev[macd_col] and wk_rising and (rsi_history < 30).any()):
 
-            # Only run earnings check for stocks
-            category = get_symbol_category(ticker)
-            earnings_ok = is_earnings_safe(ticker) if category == "STOCKS" else True
+            # Earnings check for stocks
+            if category == "STOCKS" and not is_earnings_safe(ticker):
+                continue
 
-            if earnings_ok:
-                # Use the dynamic stop loss
-                stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_BUY)
+            # Use the dynamic stop loss
+            stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_BUY)
 
-                candidates.append({
-                    'ticker': ticker, 'type': mt5.ORDER_TYPE_BUY,
-                    'score': curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price,
-                    'is_long': True
-                })
+            candidates.append({
+                'ticker': ticker, 'type': mt5.ORDER_TYPE_BUY,
+                'score': curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price,
+                'is_long': True
+            })
 
         # SHORT Logic
         elif ALLOW_SHORTS and (curr['RSI_14'] >= 55 and curr['RSI_14'] < prev['RSI_14'] and
                                curr[macd_col] < prev[macd_col] and wk_falling and (rsi_history > 70).any()):
 
-            # Only run earnings check for stocks
-            category = get_symbol_category(ticker)
-            earnings_ok = is_earnings_safe(ticker) if category == "STOCKS" else True
+            # Earnings check for stocks
+            if category == "STOCKS" and not is_earnings_safe(ticker):
+                continue
 
-            if earnings_ok:
-                # Use the dynamic stop loss
-                stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_SELL)
+            # Use the dynamic stop loss
+            stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_SELL)
 
-                candidates.append({
-                    'ticker': ticker, 'type': mt5.ORDER_TYPE_SELL,
-                    'score': 100 - curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price,
-                    'is_long': False
-                })
+            candidates.append({
+                'ticker': ticker, 'type': mt5.ORDER_TYPE_SELL,
+                'score': 100 - curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price,
+                'is_long': False
+            })
 
     # --- SORTING LOGIC ---
     # Sort by score: Best Longs (lowest RSI) and Best Shorts (highest RSI) first
