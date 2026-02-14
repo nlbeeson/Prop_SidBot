@@ -165,11 +165,12 @@ async def schedule_weekly_task(func, target_day, target_time_str, task_name):
 # -------------------------------
 async def main():
     try:
-        # Initial connect (uses MT5_PATH from config)
-        if not mt5.initialize(path=MT5_PATH, portable=True, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
+        # Explicitly setting portable=True matches your shortcut flag
+        if not mt5.initialize(path=MT5_PATH, portable=True, login=MT5_LOGIN, password=MT5_PASSWORD,
+                                server=MT5_SERVER):
             logger.error(f"MT5 initialization FAILED, error: {mt5.last_error()}")
             return
-        logger.info("MT5 initialized successfully")
+        logger.info("MT5 attached successfully in portable mode")
     except Exception as e:
         logger.exception(f"Exception during MT5 initialization: {e}")
         return
