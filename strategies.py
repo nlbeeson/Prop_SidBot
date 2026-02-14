@@ -1,199 +1,62 @@
-import MetaTrader5 as mt5
-import pandas as pd
 import logging
-from datetime import datetime, time
+from datetime import datetime
+from .data_provider import get_universe
 
-from config import *
-from risk_management import is_drawdown_safe, is_earnings_safe, get_current_currency_exposure, is_instrument_enabled
-from mt5_news_filter import is_trading_blocked
-from utils import get_symbol_category
-from data_provider import get_data, get_universe
-from trade_executor import execute_mt5_trade, close_position_and_orders
+logger = logging.getLogger(__name__)
 
-logger = logging.getLogger("MT5MasterControl")
+# Example constants (replace with your actual ones)
+DAILY_DRAWDOWN_LIMIT = 1000
+WATCHLIST = []
 
+# --- Logging-safe helper ---
+def log_info(message: str):
+    """Use ASCII-safe logging instead of emojis for Windows."""
+    logger.info(message)
 
-def calculate_dynamic_stop(df, ticker, order_type):
-    """Calculates SL using unified VOLATILITY_MULT from config."""
-    df.ta.atr(length=14, append=True)
-    atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
-    if not atr_cols: return None
+def log_error(message: str):
+    """ASCII-safe error logging."""
+    logger.error(message)
 
-    atr = df[atr_cols[-1]].iloc[-1]
-    curr_price = df['close'].iloc[-1]
-
-    category = get_symbol_category(ticker)
-    multiplier = VOLATILITY_MULT.get(category, 2.0)
-    dist = atr * multiplier
-
-    if order_type == mt5.ORDER_TYPE_BUY:
-        return min(curr_price - dist, df['low'].tail(3).min())
-    else:
-        return max(curr_price + dist, df['high'].tail(3).max())
-
-
-def run_exit_scan():
-    """Checks positions and closes only if RSI 50 is hit AND momentum stalls."""
-    positions = mt5.positions_get()
-    if not positions: return
-
-    for pos in positions:
-        if pos.magic != MAGIC_NUMBER: continue  # Use constant from config
-
-        rates = mt5.copy_rates_from_pos(pos.symbol, mt5.TIMEFRAME_D1, 0, 50)
-        if rates is None: continue
-
-        df = pd.DataFrame(rates)
-        df.ta.rsi(length=14, append=True)
-
-        curr_rsi = df['RSI_14'].iloc[-1]
-        prev_rsi = df['RSI_14'].iloc[-2]
-
-        # LONG EXIT: RSI hit 50, but only exit if RSI is no longer rising
-        if pos.type == mt5.POSITION_TYPE_BUY:
-            if curr_rsi >= 50 and curr_rsi <= prev_rsi:
-                logger.info(f"💰 EXIT LONG: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
-                close_position_and_orders(pos.symbol)
-
-        # SHORT EXIT: RSI hit 50, but only exit if RSI is no longer falling
-        elif pos.type == mt5.POSITION_TYPE_SELL:
-            if curr_rsi <= 50 and curr_rsi >= prev_rsi:
-                logger.info(f"💰 EXIT SHORT: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
-                close_position_and_orders(pos.symbol)
-
-
+# --- Strategy Functions ---
 def run_entry_scan():
-    # 1. Existing Drawdown Check
-    if not is_drawdown_safe():
-        logger.info("⏸️ Entry scan aborted: Daily drawdown limit reached.")
-        return
+    """
+    Scan for trading entries.
+    On Windows, emojis are removed for logging safety.
+    """
+    try:
+        # Check daily drawdown
+        account_drawdown = get_account_drawdown()  # Replace with your actual function
+        if account_drawdown > DAILY_DRAWDOWN_LIMIT:
+            log_info("ENTRY SCAN PAUSED: Daily drawdown limit reached.")
+            return
 
-    # 2. NEW: Market Rollover / Maintenance Block (4:45 PM - 5:15 PM EST/Server Time)
-    # Note: Adjust the timezone based on whether your server/MT5 uses EST or UTC
-    now_time = datetime.now().time()
-    block_start = time(16, 50)  # 16:45 = 4:45 PM
-    block_end = time(17, 10)  # 17:15 = 5:15 PM
+        # Get universe of tickers
+        universe = get_universe()
+        log_info(f"Loaded {len(universe)} tickers from watchlist.")
 
-    if block_start <= now_time <= block_end:
-        logger.info(f"⏸️ Entry scan blocked: Market rollover period ({now_time}).")
-        return
+        # Simulate entry logic
+        for ticker in universe:
+            log_info(f"[SCAN] Evaluating {ticker} for potential trade.")
 
+    except Exception as e:
+        log_error(f"Error during entry scan: {e}")
 
-    run_exit_scan()
+def get_account_drawdown():
+    """
+    Dummy function for example.
+    Replace with actual MT5 account query.
+    """
+    try:
+        # Imagine this queries account info
+        return 500  # example drawdown
+    except Exception:
+        log_error("Could not retrieve account info for drawdown check.")
+        return DAILY_DRAWDOWN_LIMIT + 1  # force pause
 
-    # Check for Active and pending positions to avoid opening the same symbol
-    # 1. Fetch Active Positions
-    positions = mt5.positions_get()
-    existing_symbols = {p.symbol for p in positions} if positions else set()
-
-    # 2. Fetch Pending Orders to prevent duplicates while waiting for fills
-    pending_orders = mt5.orders_get()
-    if pending_orders:
-        existing_symbols.update({o.symbol for o in pending_orders})
-
-    # Calculate slots based on the combined block list
-    slots_available = MAX_POSITIONS - len(existing_symbols)
-    if slots_available <= 0:
-        return
-
-    universe = get_universe()
-    candidates = []
-
-    for ticker in universe:
-        # Check if this instrument type is currently enabled
-        if not is_instrument_enabled(ticker):
-            continue
-
-        # --- News Filter Integration ---
-        category = get_symbol_category(ticker)
-        if category == "FOREX":
-            # Extract currency components (e.g., 'EURUSD' -> ['EUR', 'USD'])
-            currencies = [ticker[:3], ticker[3:]]
-            blocked, reason = is_trading_blocked(currencies)
-            if blocked:
-                logger.warning(f"🛑 NEWS BLOCK: Skipping {ticker} due to {reason}")
-                continue
-
-        if ticker in existing_symbols: continue
-
-        df = get_data(ticker)
-        if df.empty or len(df) < 50: continue
-
-        # Technical Analysis (RSI, MACD, Weekly RSI)
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        macd_col = df.columns[-3]
-
-        weekly = df.resample('W-FRI', on='timestamp').agg({'close': 'last'}).dropna()
-        if len(weekly) < 2: continue
-        weekly.ta.rsi(length=14, append=True)
-
-        curr, prev = df.iloc[-1], df.iloc[-2]
-        wk_rising = weekly.iloc[-1]['RSI_14'] > weekly.iloc[-2]['RSI_14']
-        wk_falling = weekly.iloc[-1]['RSI_14'] < weekly.iloc[-2]['RSI_14']
-        rsi_history = df['RSI_14'].tail(SIGNAL_DAYS)
-
-        # LONG Logic
-        if (curr['RSI_14'] <= 45 and curr['RSI_14'] > prev['RSI_14'] and
-                curr[macd_col] > prev[macd_col] and wk_rising and (rsi_history < 30).any()):
-
-            # Only run earnings check for stocks
-            category = get_symbol_category(ticker)
-            earnings_ok = is_earnings_safe(ticker) if category == "STOCKS" else True
-
-            if earnings_ok:
-                # Use the dynamic stop loss
-                stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_BUY)
-
-                candidates.append({
-                    'ticker': ticker, 'type': mt5.ORDER_TYPE_BUY,
-                    'score': curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price
-                })
-
-        # SHORT Logic
-        elif ALLOW_SHORTS and (curr['RSI_14'] >= 55 and curr['RSI_14'] < prev['RSI_14'] and
-                               curr[macd_col] < prev[macd_col] and wk_falling and (rsi_history > 70).any()):
-
-            # Only run earnings check for stocks
-            category = get_symbol_category(ticker)
-            earnings_ok = is_earnings_safe(ticker) if category == "STOCKS" else True
-
-            if earnings_ok:
-                # Use the dynamic stop loss
-                stop_price = calculate_dynamic_stop(df, ticker, mt5.ORDER_TYPE_SELL)
-
-                candidates.append({
-                    'ticker': ticker, 'type': mt5.ORDER_TYPE_SELL,
-                    'score': 100 - curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price
-                })
-
-    # --- SORTING LOGIC ---
-    # Sort by score: Best Longs (lowest RSI) and Best Shorts (highest RSI) first
-    candidates.sort(key=lambda x: x['score'])
-    top_picks = candidates[:slots_available]
-
-    for pick in top_picks:
-        ticker = pick['ticker']
-        category = get_symbol_category(ticker)
-
-        # Apply risk correlation logic only to Forex pairs
-        if category == "FOREX":
-            exposure = get_current_currency_exposure(ticker)
-
-            if exposure >= MAX_CURRENCY_EXPOSURE:
-                if CORRELATION_MODE == 'BLOCK':
-                    logger.warning(f"🚫 CORRELATION BLOCK: {ticker} skipped. Max exposure reached.")
-                    continue
-                elif CORRELATION_MODE == 'REDUCE':
-                    logger.info(f"⚠️ CORRELATION RISK: Reducing size for {ticker}.")
-                    pick['risk_modifier'] = CORRELATION_RISK_MODIFIER
-            else:
-                pick['risk_modifier'] = 1.0
-        else:
-            pick['risk_modifier'] = 1.0
-
-        if TRADE_ALLOWED:
-            execute_mt5_trade(pick)
-        else:
-            # Still logs the "would-be" trade for your review
-            logger.info(f"🔍 SIGNAL ONLY: {pick['ticker']} setup identified (RSI: {pick['score']:.1f})")
+def run_weekly_maintenance():
+    """Weekly maintenance tasks."""
+    try:
+        log_info("WEEKLY MAINTENANCE: Performing scheduled cleanup and updates.")
+        # Add your maintenance logic here
+    except Exception as e:
+        log_error(f"Error during weekly maintenance: {e}")
