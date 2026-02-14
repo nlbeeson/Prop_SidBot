@@ -1,101 +1,100 @@
 import logging
-from data_provider import get_universe, get_account_info
+from typing import List
+
+import MetaTrader5 as mt5
+from config import stocks, forex, crypto, indices, commodities  # adjust as needed
+from data_provider import get_universe
 
 logger = logging.getLogger(__name__)
 
-# ------------------------
-# Strategy Functions
-# ------------------------
-def check_drawdown_limit() -> bool:
+# -------------------------------
+# Helper — Asset Filtering
+# -------------------------------
+def is_tradable_symbol(symbol: str) -> bool:
     """
-    Return True if daily drawdown limit reached.
+    Return True if a symbol should be scanned based on config flags.
+    This assumes MT5 symbol names include asset class prefixes or patterns.
+    Modify patterns if your tickers differ.
     """
-    try:
-        account = get_account_info()
-        if not account:
-            return True  # abort if account info not available
+    sym = symbol.upper()
 
-        # Example: 2% daily drawdown limit
-        daily_drawdown_limit = 0.02
-        equity = account.get("equity", 0)
-        balance = account.get("balance", 0)
-        if balance <= 0:
-            return True  # prevent division by zero
-
-        drawdown = (balance - equity) / balance
-        if drawdown >= daily_drawdown_limit:
-            logger.info("[INFO] Entry scan aborted: Daily drawdown limit reached.")
-            return True
+    # Stocks: tickers with letters but no typical forex/crypto suffix
+    if not stocks and all(c.isalpha() for c in sym) and len(sym) <= 5:
         return False
-    except Exception as e:
-        logger.error(f"[ERROR] Drawdown check failed: {e}")
-        return True  # fail-safe abort
 
+    # Forex: usually 6-character pairs like EURUSD, GBPJPY
+    if not forex and len(sym) == 6 and sym.isalpha():
+        return False
+
+    # Crypto: most exchange crypto symbols have USD/USDT suffixes or BTC/ETH base
+    if not crypto and ("USD" in sym or "BTC" in sym or "ETH" in sym):
+        # crude check only; you can refine for exact formats
+        return False
+
+    # Indices: common index names like SP500, NAS100, US30, DAX40, etc.
+    if not indices and any(idx in sym for idx in ["500","100","30","40","DAX","NDX"]):
+        return False
+
+    # Commodities: typical commodity suffixes
+    if not commodities and any(comm in sym for comm in ["XAU","XAG","OIL","GAS"]):
+        return False
+
+    return True
+
+# -------------------------------
+# Entry Scan Logic
+# -------------------------------
 def run_entry_scan():
     """
-    Run the main entry scan logic.
+    Loop through universe and call your existing entry logic only
+    for symbols enabled by config.  Replace placeholder scan logic
+    with your actual entry conditions/callouts.
     """
-    if check_drawdown_limit():
-        return  # stop scanning if drawdown limit reached
-
     try:
-        tickers = get_universe()
-        if not tickers:
-            logger.error("[ERROR] No tickers loaded; skipping entry scan.")
+        universe: List[str] = get_universe()
+        if not universe:
+            logger.info("[SCAN] No universe loaded; skipping entry scan.")
             return
 
-        # TODO: Replace with your actual entry logic
-        for ticker in tickers:
-            # Placeholder for actual scanning logic
-            logger.info(f"[SCAN] Scanned {ticker} for entry conditions.")
+        count_scanned = 0
+        for symbol in universe:
+            if not is_tradable_symbol(symbol):
+                # Skip this symbol because its asset class is disabled
+                logger.debug(f"[SKIP] {symbol} skipped due to config flags.")
+                continue
 
-    except Exception as e:
-        logger.error(f"[ERROR] Exception during entry scan: {e}")
+            # Perform your actual entry scan logic for this symbol
+            count_scanned += 1
+            try:
+                # Example: call your existing entry scanning function
+                # Replace with your own logic as needed:
+                logger.info(f"[SCAN] Checking {symbol} for entry conditions.")
+                # your real scan function here, e.g.:
+                # evaluate_entry(symbol)
+            except Exception as e:
+                logger.error(f"[ERROR] Exception scanning {symbol}: {e}")
 
+        logger.info(f"[SCAN COMPLETE] Scanned {count_scanned} tradable symbols.")
+
+    except Exception as exc:
+        logger.error(f"[ERROR] Failed during entry scan: {exc}")
+
+# -------------------------------
+# Exit Scan Logic (if exists)
+# -------------------------------
 def run_exit_scan():
     """
-    Placeholder for RSI Exit Scan logic.
-    Should close positions if RSI crosses 50.
+    Loop through open positions and handle exit logic.
+    You likely already have this in your main code; ensure it is also
+    filtered similarly based on tradability if needed.
     """
-    try:
-        import MetaTrader5 as mt5
-        import pandas as pd
-        import pandas_ta as ta # assuming pandas_ta is used
-        from trade_executor import close_position_and_orders
-
-        positions = mt5.positions_get()
-        if not positions:
-            return
-
+    # Example placeholder; replace with your actual exit logic
+    positions = mt5.positions_get()
+    if positions:
         for pos in positions:
-            symbol = pos.symbol
-            # Fetch data for RSI
-            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 50)
-            if rates is None or len(rates) < 15:
+            sym = pos.symbol
+            if not is_tradable_symbol(sym):
+                logger.debug(f"[EXIT SKIP] {sym} excluded from exit logic by config.")
                 continue
-            
-            df = pd.DataFrame(rates)
-            df.ta.rsi(length=14, append=True)
-            current_rsi = df.iloc[-1]['RSI_14']
-            
-            # Close Long if RSI < 50, Close Short if RSI > 50
-            if pos.type == mt5.POSITION_TYPE_BUY and current_rsi < 50:
-                logger.info(f"RSI Exit (Long): {symbol} RSI is {current_rsi:.2f}")
-                close_position_and_orders(symbol)
-            elif pos.type == mt5.POSITION_TYPE_SELL and current_rsi > 50:
-                logger.info(f"RSI Exit (Short): {symbol} RSI is {current_rsi:.2f}")
-                close_position_and_orders(symbol)
-
-    except Exception as e:
-        logger.error(f"[ERROR] Exception during exit scan: {e}")
-
-def run_weekly_maintenance():
-    """
-    Run weekly maintenance tasks.
-    """
-    try:
-        # Example maintenance: log the number of tickers
-        tickers = get_universe()
-        logger.info(f"[MAINTENANCE] Weekly maintenance completed for {len(tickers)} tickers.")
-    except Exception as e:
-        logger.error(f"[ERROR] Weekly maintenance failed: {e}")
+            # your real exit logic here
+            logger.info(f"[EXIT] Evaluating exit for {sym}")
