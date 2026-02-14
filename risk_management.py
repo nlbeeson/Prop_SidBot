@@ -5,7 +5,7 @@ from datetime import datetime, time
 from pathlib import Path
 
 from config import *
-from utils import get_symbol_category
+from utils import get_symbol_category, get_base_quote
 
 logger = logging.getLogger("MT5MasterControl")
 
@@ -76,12 +76,14 @@ def get_current_currency_exposure(new_ticker):
     if not positions:
         return 0
 
-    new_currencies = [new_ticker[:3], new_ticker[3:]]
+    new_base, new_quote = get_base_quote(new_ticker)
+    new_currencies = [c for c in [new_base, new_quote] if c]
     exposure_count = 0
 
     for pos in positions:
         # Extract base and quote from open position symbols
-        active_currencies = [pos.symbol[:3], pos.symbol[3:]]
+        base, quote = get_base_quote(pos.symbol)
+        active_currencies = [c for c in [base, quote] if c]
         for cur in new_currencies:
             if cur in active_currencies:
                 exposure_count += 1

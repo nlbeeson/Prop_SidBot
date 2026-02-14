@@ -1,7 +1,7 @@
 import MetaTrader5 as mt5
 import logging
 from config import *
-from utils import log_event
+from utils import log_event, get_base_quote
 
 logger = logging.getLogger("MT5MasterControl")
 
@@ -45,10 +45,10 @@ def execute_mt5_trade(pick):
     if price_dist == 0: return
 
     base_risk_per_lot = price_dist * info.trade_contract_size
-    quote_currency = symbol[3:6]  # Works for 6-character Forex pairs
+    _, quote_currency = get_base_quote(symbol)
 
     conversion_rate = 1.0
-    if quote_currency != "USD":
+    if quote_currency and quote_currency != "USD":
         # Search for a conversion pair (e.g., if quote is GBP, we need GBPUSD)
         conv_symbol = f"{quote_currency}USD"
         conv_tick = mt5.symbol_info_tick(conv_symbol)

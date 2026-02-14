@@ -20,6 +20,28 @@ def get_symbol_category(symbol):
     return "FOREX"
 
 
+def get_base_quote(symbol):
+    """Extracts base and quote currencies, handling suffixes and different lengths."""
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        # Fallback for 6-char forex pairs if info not available
+        if len(symbol) >= 6:
+            return symbol[:3], symbol[3:6]
+        return symbol, ""
+
+    # Try to get from symbol info if available (some brokers provide this)
+    # If not, use standard Forex logic for 6-char pairs
+    if len(symbol) >= 6 and get_symbol_category(symbol) == "FOREX":
+        # Handle suffixes like EURUSD.pro
+        clean_symbol = symbol.replace(".", "").replace("_", "")
+        # This is still a bit of a guess, but better than hardcoded indices
+        # Most forex is 6 chars + suffix
+        return symbol[:3], symbol[3:6]
+    
+    # For non-forex, base is usually the symbol itself
+    return symbol, ""
+
+
 def log_event(event_data):
     """
     Saves trade attempts and errors to a CSV file in the project root.

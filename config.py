@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- CREDENTIALS ---
-MT5_LOGIN = int(os.getenv("MT5_LOGIN"),0)
+MT5_LOGIN = int(os.getenv("MT5_LOGIN", 0))
 MT5_PASSWORD = os.getenv("MT5_PASSWORD")
 MT5_SERVER = os.getenv("MT5_SERVER")
 MT5_PATH = os.getenv("MT5_PATH")
-MAGIC_NUMBER = os.getenv("MAGIC_NUMBER")
+MAGIC_NUMBER = int(os.getenv("MAGIC_NUMBER", 999))
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER", "").split(',')
@@ -49,6 +49,10 @@ CATEGORY_MAP = {
     "BTC": "CRYPTO", "ETH": "CRYPTO",
     "US30": "INDICES", "NAS100": "INDICES", "SPX500": "INDICES"
 }
+
+# --- PROP FIRM LIMITS ---
+# 0.047 is 4.7% (safety margin below 5% daily limit)
+MAX_DAILY_DRAWDOWN_LIMIT = float(os.getenv("MAX_DAILY_DRAWDOWN_LIMIT", 0.047))
 
 # --- SCHEDULING ---
 EXIT_CHECK_INTERVAL = 300  # 5 Minutes

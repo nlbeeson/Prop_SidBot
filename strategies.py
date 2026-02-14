@@ -52,6 +52,43 @@ def run_entry_scan():
     except Exception as e:
         logger.error(f"[ERROR] Exception during entry scan: {e}")
 
+def run_exit_scan():
+    """
+    Placeholder for RSI Exit Scan logic.
+    Should close positions if RSI crosses 50.
+    """
+    try:
+        import MetaTrader5 as mt5
+        import pandas as pd
+        import pandas_ta as ta # assuming pandas_ta is used
+        from trade_executor import close_position_and_orders
+
+        positions = mt5.positions_get()
+        if not positions:
+            return
+
+        for pos in positions:
+            symbol = pos.symbol
+            # Fetch data for RSI
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 50)
+            if rates is None or len(rates) < 15:
+                continue
+            
+            df = pd.DataFrame(rates)
+            df.ta.rsi(length=14, append=True)
+            current_rsi = df.iloc[-1]['RSI_14']
+            
+            # Close Long if RSI < 50, Close Short if RSI > 50
+            if pos.type == mt5.POSITION_TYPE_BUY and current_rsi < 50:
+                logger.info(f"RSI Exit (Long): {symbol} RSI is {current_rsi:.2f}")
+                close_position_and_orders(symbol)
+            elif pos.type == mt5.POSITION_TYPE_SELL and current_rsi > 50:
+                logger.info(f"RSI Exit (Short): {symbol} RSI is {current_rsi:.2f}")
+                close_position_and_orders(symbol)
+
+    except Exception as e:
+        logger.error(f"[ERROR] Exception during exit scan: {e}")
+
 def run_weekly_maintenance():
     """
     Run weekly maintenance tasks.

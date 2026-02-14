@@ -5,7 +5,7 @@ import pandas as pd
 import pandas_ta_classic
 
 from config import *
-from utils import get_symbol_category
+from utils import get_symbol_category, get_base_quote
 
 logger = logging.getLogger("MT5Master")
 
