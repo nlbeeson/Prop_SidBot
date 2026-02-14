@@ -15,6 +15,9 @@ from mt5_news_filter import is_trading_blocked
 from mt5_trailing_stops import apply_trailing_stop
 from prop_sid_advisor import run_advisor_scan, send_admin_heartbeat
 from strategies import run_entry_scan, run_exit_scan
+import aiohttp
+
+
 
 # -------------------------------
 # Logging Setup
@@ -64,9 +67,19 @@ logger.info("=== Logging setup complete ===")
 TIMEZONE = pytz.timezone('US/Eastern')
 TRADING_BLOCKED = False
 
+
 # -------------------------------
 # Async Task Wrappers
 # -------------------------------
+
+async def notify_discord(message):
+    async with aiohttp.ClientSession() as session:
+        webhook_data = {"content": message}
+        async with session.post(BEEHOUSE_TRADE_ALERTS_WEBHOOK_URL, json=webhook_data) as response:
+            if response.status != 204:
+                logger.error(f"Discord notification failed: {response.status}")
+
+
 async def high_frequency_risk_task():
     global TRADING_BLOCKED
     while True:
@@ -175,6 +188,7 @@ async def main():
                 return
 
         logger.info("MT5 initialized successfully")
+        await notify_discord("🚀 **SidBot Online:** Successfully attached to MT5 in Portable Mode.")
     except Exception as e:
         logger.exception(f"Exception during MT5 initialization: {e}")
         return
