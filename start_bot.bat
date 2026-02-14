@@ -1,10 +1,11 @@
 @echo off
-:: 1. Start MT5 in Portable Mode
-:: 'start' allows the script to continue without waiting for MT5 to close
-start "" "C:\Trading\TradingTerminals\terminal64.exe" /portable
+:: Move to the MT5 directory first
+cd /d "C:\Trading\TradingTerminals"
+start "" "terminal64.exe" /portable
 
-:: 2. Wait for MT5 to initialize (15 seconds is usually enough for a VPS)
-timeout /t 15 /nobreak
+:: Wait for MT5 to load
+timeout /t 20 /nobreak
 
-:: 3. Launch the Python Bot
-"C:\Trading\Bots\Bot_1\venv\Scripts\pythonw.exe" "C:\Trading\Bots\Bot_1\main.py"
+:: Move to the Bot directory before launching Python
+cd /d "C:\Trading\Bots\Bot_1"
+"C:\Trading\Bots\Bot_1\venv\Scripts\pythonw.exe" "main.py"
