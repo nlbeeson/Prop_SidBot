@@ -14,7 +14,7 @@ from mt5_earnings_shield import liquidate_earnings_risk
 from mt5_news_filter import is_trading_blocked
 from mt5_trailing_stops import apply_trailing_stop
 from prop_sid_advisor import run_advisor_scan, send_admin_heartbeat
-from strategies import run_entry_scan, run_weekly_maintenance, run_exit_scan
+from strategies import run_entry_scan, run_exit_scan
 
 # -------------------------------
 # Logging Setup

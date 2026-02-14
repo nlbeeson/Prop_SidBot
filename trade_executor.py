@@ -124,10 +124,13 @@ def close_position_and_orders(symbol):
     positions = mt5.positions_get(symbol=symbol)
     if positions:
         info = mt5.symbol_info(symbol)
+        if info is None:
+            logger.error(f"❌ Could not get symbol info for {symbol} during close.")
+            return
+
         for pos in positions:
             if pos.magic != MAGIC_NUMBER: continue  # Skip manual trades
 
-            info = mt5.symbol_info(symbol)
             if info.filling_mode & 1:
                 filling_type = mt5.ORDER_FILLING_FOK
             elif info.filling_mode & 2:
@@ -136,6 +139,10 @@ def close_position_and_orders(symbol):
                 filling_type = mt5.ORDER_FILLING_RETURN
 
             tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                logger.error(f"❌ Could not get tick info for {symbol} during close.")
+                continue
+
             # 0 is Buy (Long), 1 is Sell (Short)
             order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
             price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
@@ -153,4 +160,8 @@ def close_position_and_orders(symbol):
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": filling_type,  # Immediate or Cancel
             }
-            mt5.order_send(request)
+            result = mt5.order_send(request)
+            if result is None:
+                logger.error(f"❌ order_send returned None for {symbol}")
+            elif result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"❌ Failed to close {symbol}: {result.comment} (retcode: {result.retcode})")

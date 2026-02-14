@@ -1,3 +1,8 @@
+try:
+    import pandas_ta as ta
+except ImportError:
+    # Handle the case where pandas_ta is not installed or accessible
+    pass
 import MetaTrader5 as mt5
 import pandas as pd
 import logging
@@ -34,32 +39,35 @@ def calculate_dynamic_stop(df, ticker, order_type):
 
 def run_exit_scan():
     """Checks positions and closes only if RSI 50 is hit AND momentum stalls."""
-    positions = mt5.positions_get()
-    if not positions: return
+    try:
+        positions = mt5.positions_get()
+        if not positions: return
 
-    for pos in positions:
-        if pos.magic != MAGIC_NUMBER: continue  # Use constant from config
+        for pos in positions:
+            if pos.magic != MAGIC_NUMBER: continue  # Use constant from config
 
-        rates = mt5.copy_rates_from_pos(pos.symbol, mt5.TIMEFRAME_D1, 0, 50)
-        if rates is None: continue
+            rates = mt5.copy_rates_from_pos(pos.symbol, mt5.TIMEFRAME_D1, 0, 50)
+            if rates is None or len(rates) < 2: continue
 
-        df = pd.DataFrame(rates)
-        df.ta.rsi(length=14, append=True)
+            df = pd.DataFrame(rates)
+            df.ta.rsi(length=14, append=True)
 
-        curr_rsi = df['RSI_14'].iloc[-1]
-        prev_rsi = df['RSI_14'].iloc[-2]
+            curr_rsi = df['RSI_14'].iloc[-1]
+            prev_rsi = df['RSI_14'].iloc[-2]
 
-        # LONG EXIT: RSI hit 50, but only exit if RSI is no longer rising
-        if pos.type == mt5.POSITION_TYPE_BUY:
-            if curr_rsi >= 50 and curr_rsi <= prev_rsi:
-                logger.info(f"💰 EXIT LONG: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
-                close_position_and_orders(pos.symbol)
+            # LONG EXIT: RSI hit 50, but only exit if RSI is no longer rising
+            if pos.type == mt5.POSITION_TYPE_BUY:
+                if curr_rsi >= 50 and curr_rsi <= prev_rsi:
+                    logger.info(f"💰 EXIT LONG: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
+                    close_position_and_orders(pos.symbol)
 
-        # SHORT EXIT: RSI hit 50, but only exit if RSI is no longer falling
-        elif pos.type == mt5.POSITION_TYPE_SELL:
-            if curr_rsi <= 50 and curr_rsi >= prev_rsi:
-                logger.info(f"💰 EXIT SHORT: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
-                close_position_and_orders(pos.symbol)
+            # SHORT EXIT: RSI hit 50, but only exit if RSI is no longer falling
+            elif pos.type == mt5.POSITION_TYPE_SELL:
+                if curr_rsi <= 50 and curr_rsi >= prev_rsi:
+                    logger.info(f"💰 EXIT SHORT: {pos.symbol} RSI {curr_rsi:.1f} (Momentum Stalled)")
+                    close_position_and_orders(pos.symbol)
+    except Exception as e:
+        logger.error(f"Error in exit scan: {e}")
 
 
 def run_entry_scan():
@@ -139,7 +147,8 @@ def run_entry_scan():
 
                 candidates.append({
                     'ticker': ticker, 'type': mt5.ORDER_TYPE_BUY,
-                    'score': curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price
+                    'score': curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price,
+                    'is_long': True
                 })
 
         # SHORT Logic
@@ -156,7 +165,8 @@ def run_entry_scan():
 
                 candidates.append({
                     'ticker': ticker, 'type': mt5.ORDER_TYPE_SELL,
-                    'score': 100 - curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price
+                    'score': 100 - curr['RSI_14'], 'price': curr['close'], 'stop_price': stop_price,
+                    'is_long': False
                 })
 
     # --- SORTING LOGIC ---

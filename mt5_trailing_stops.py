@@ -2,7 +2,10 @@ import logging
 
 import MetaTrader5 as mt5
 import pandas as pd
-import pandas_ta_classic
+try:
+    import pandas_ta as ta
+except ImportError:
+    pass
 
 from config import *
 from utils import get_symbol_category, get_base_quote
@@ -24,8 +27,13 @@ def apply_trailing_stop():
         if rates is None or len(rates) < 20: continue
 
         df = pd.DataFrame(rates)
-        df.ta.atr(length=14, append=True)
-        current_atr = df.iloc[-1][df.columns[df.columns.str.contains('ATR')][-1]]
+        try:
+            df.ta.atr(length=14, append=True)
+            atr_cols = [col for col in df.columns if 'ATR' in col.upper()]
+            if not atr_cols: continue
+            current_atr = df[atr_cols[-1]].iloc[-1]
+        except Exception:
+            continue
 
         # Get category to apply correct multiplier
         category = get_symbol_category(symbol)  # Helper from prop_sidbot

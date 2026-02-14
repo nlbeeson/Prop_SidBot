@@ -29,17 +29,20 @@ def get_base_quote(symbol):
             return symbol[:3], symbol[3:6]
         return symbol, ""
 
-    # Try to get from symbol info if available (some brokers provide this)
-    # If not, use standard Forex logic for 6-char pairs
+    if hasattr(info, 'currency_base') and info.currency_base:
+        return info.currency_base, info.currency_profit
+
+    # Fallback to standard Forex logic for 6-char pairs if currency info is missing
     if len(symbol) >= 6 and get_symbol_category(symbol) == "FOREX":
-        # Handle suffixes like EURUSD.pro
-        clean_symbol = symbol.replace(".", "").replace("_", "")
-        # This is still a bit of a guess, but better than hardcoded indices
-        # Most forex is 6 chars + suffix
+        # Handle suffixes like EURUSD.pro by taking first 6 alpha chars if possible
+        import re
+        match = re.match(r'^([A-Z]{3})([A-Z]{3})', symbol.upper())
+        if match:
+            return match.group(1), match.group(2)
         return symbol[:3], symbol[3:6]
     
-    # For non-forex, base is usually the symbol itself
-    return symbol, ""
+    # For non-forex, base is usually the symbol itself or currency_base if it exists
+    return symbol, info.currency_profit if hasattr(info, 'currency_profit') else ""
 
 
 def log_event(event_data):

@@ -76,11 +76,16 @@ def get_current_currency_exposure(new_ticker):
     if not positions:
         return 0
 
+    if get_symbol_category(new_ticker) != "FOREX":
+        return 0
+
     new_base, new_quote = get_base_quote(new_ticker)
     new_currencies = [c for c in [new_base, new_quote] if c]
     exposure_count = 0
 
     for pos in positions:
+        if get_symbol_category(pos.symbol) != "FOREX":
+            continue
         # Extract base and quote from open position symbols
         base, quote = get_base_quote(pos.symbol)
         active_currencies = [c for c in [base, quote] if c]

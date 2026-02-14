@@ -33,11 +33,17 @@ def close_all_positions():
         print(f"📉 Closing {len(positions)} positions...")
         for pos in positions:
             tick = mt5.symbol_info_tick(pos.symbol)
+            if tick is None:
+                print(f"❌ Could not get tick info for {pos.symbol}. Skipping.")
+                continue
             order_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
             price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
 
             # Use the dynamic filling logic we established
             info = mt5.symbol_info(pos.symbol)
+            if info is None:
+                print(f"❌ Could not get symbol info for {pos.symbol}. Skipping.")
+                continue
             filling = mt5.ORDER_FILLING_FOK if info.filling_mode & 1 else \
                 mt5.ORDER_FILLING_IOC if info.filling_mode & 2 else \
                     mt5.ORDER_FILLING_RETURN
