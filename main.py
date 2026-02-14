@@ -31,7 +31,7 @@ logger = logging.getLogger("MT5MasterControl")
 logger.setLevel(logging.INFO)
 
 # File handler
-file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=5_000_000, backupCount=5)
+file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=5_000_000, backupCount=5, encoding="utf-8")
 file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 
 # Stream handler (console)
@@ -165,12 +165,16 @@ async def schedule_weekly_task(func, target_day, target_time_str, task_name):
 # -------------------------------
 async def main():
     try:
-        # Explicitly setting portable=True matches your shortcut flag
-        if not mt5.initialize(path=MT5_PATH, portable=True, login=MT5_LOGIN, password=MT5_PASSWORD,
-                                server=MT5_SERVER):
-            logger.error(f"MT5 initialization FAILED, error: {mt5.last_error()}")
-            return
-        logger.info("MT5 attached successfully in portable mode")
+        # First try to attach to an ALREADY running terminal (pass no path)
+        if not mt5.initialize():
+            logger.info("No running terminal found, attempting to launch via path...")
+            # If that fails, then try to launch it using the explicit path
+            if not mt5.initialize(path=MT5_PATH, portable=True, login=MT5_LOGIN, password=MT5_PASSWORD,
+                                    server=MT5_SERVER):
+                logger.error(f"MT5 initialization FAILED, error: {mt5.last_error()}")
+                return
+
+        logger.info("MT5 initialized successfully")
     except Exception as e:
         logger.exception(f"Exception during MT5 initialization: {e}")
         return

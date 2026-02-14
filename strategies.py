@@ -1,8 +1,4 @@
-try:
-    import pandas_ta as ta
-except ImportError:
-    # Handle the case where pandas_ta is not installed or accessible
-    pass
+import pandas_ta as ta
 import MetaTrader5 as mt5
 import pandas as pd
 import logging
